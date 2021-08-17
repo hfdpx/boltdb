@@ -33,7 +33,7 @@ type Tx struct {
 	WriteFlag      int            //复制或者打开数据库文件时，指定文件打开模式
 }
 
-// 事务对象 初始化
+//init 事务对象 初始化
 func (tx *Tx) init(db *DB) {
 	tx.db = db
 	tx.pages = nil
@@ -65,48 +65,48 @@ func (tx *Tx) DB() *DB {
 	return tx.db
 }
 
-// 返回当前db size
+// Size 返回当前db size
 func (tx *Tx) Size() int64 {
 	// 当前事务使用到的最大page ID * page 大小
 	return int64(tx.meta.pgid) * int64(tx.db.pageSize)
 }
 
-// 判断事务是否支持写操作
+// Writable 判断事务是否支持写操作
 func (tx *Tx) Writable() bool {
 	return tx.writable
 }
 
-// 返回一个游标
+// Cursor 返回一个游标
 func (tx *Tx) Cursor() *Cursor {
 	return tx.root.Cursor()
 }
 
-// 返回一个 事务 status 副本
+// Stats 返回一个 事务 status 副本
 func (tx *Tx) Stats() TxStats {
 	return tx.stats
 }
 
-// 返回一个特定名称的bucket，该bucket仅仅在事务生存期间有效
+// Bucket 返回一个特定名称的bucket，该bucket仅仅在事务生存期间有效
 func (tx *Tx) Bucket(name []byte) *Bucket {
 	return tx.root.Bucket(name)
 }
 
-// 创建一个特定名称的bucket，该bucket仅仅在事务生存期间有效
+// CreateBucket 创建一个特定名称的bucket，该bucket仅仅在事务生存期间有效
 func (tx *Tx) CreateBucket(name []byte) (*Bucket, error) {
 	return tx.root.CreateBucket(name)
 }
 
-// 创建一个特定名称的bucket，条件是如果该bucket不存在，该bucket仅仅在事务生存期间有效
+// CreateBucketIfNotExists 创建一个特定名称的bucket，条件是如果该bucket不存在，该bucket仅仅在事务生存期间有效
 func (tx *Tx) CreateBucketIfNotExists(name []byte) (*Bucket, error) {
 	return tx.root.CreateBucketIfNotExists(name)
 }
 
-// 删除特定名称 bucket
+// DeleteBucket 删除特定名称 bucket
 func (tx *Tx) DeleteBucket(name []byte) error {
 	return tx.root.DeleteBucket(name)
 }
 
-// 对每个bucket执行指定函数，一个出错，则停止执行剩下的
+// ForEach 对每个bucket执行指定函数，一个出错，则停止执行剩下的
 func (tx *Tx) ForEach(fn func(name []byte, b *Bucket) error) error {
 	return tx.root.ForEach(func(k, v []byte) error {
 		if err := fn(k, tx.root.Bucket(k)); err != nil {
@@ -116,12 +116,12 @@ func (tx *Tx) ForEach(fn func(name []byte, b *Bucket) error) error {
 	})
 }
 
-// 添加一个事务commit后的回调函数
+// OnCommit 添加一个事务commit后的回调函数
 func (tx *Tx) OnCommit(fn func()) {
 	tx.commitHandlers = append(tx.commitHandlers, fn)
 }
 
-// 提交事务：将所有更改写入磁盘并更新元页。如果发生磁盘写入错误，或者在只读事务上调用commit，则返回错误
+// Commit 提交事务：将所有更改写入磁盘并更新元页。如果发生磁盘写入错误，或者在只读事务上调用commit，则返回错误
 func (tx *Tx) Commit() error {
 	// 保证没有被db托管
 	_assert(!tx.managed, "managed tx commit not allowed")
@@ -211,8 +211,7 @@ func (tx *Tx) Commit() error {
 	// 关闭事务
 	tx.close()
 
-	// 调用 一些
-	//回调函数
+	// 调用 一些 回调函数
 	for _, fn := range tx.commitHandlers {
 		fn()
 	}
@@ -606,7 +605,7 @@ func (tx *Tx) Page(id int) (*PageInfo, error) {
 	return info, nil
 }
 
-// 事务 操作状态统计
+// TxStats 事务 操作状态统计
 type TxStats struct {
 	// page 统计
 	PageCount int // page 分配数

@@ -64,14 +64,15 @@ func mmap(db *DB, sz int) error {
 	return nil
 }
 
-// munmap unmaps a DB's data file from memory.
+//munmap 取消映射db file
 func munmap(db *DB) error {
 	// Ignore the unmap if we have no mapped data.
+	// 不存在映射的数据
 	if db.dataref == nil {
 		return nil
 	}
 
-	// Unmap using the original byte slice.
+	// 取消映射
 	err := syscall.Munmap(db.dataref)
 	db.dataref = nil
 	db.data = nil
