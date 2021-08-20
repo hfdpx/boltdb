@@ -37,6 +37,35 @@ const (
 // DB 默认page大小（操作系统page size）
 var defaultPageSize = os.Getpagesize()
 
+// Options 表示打开数据库时可以设置的选项
+type Options struct {
+	//Timeout 等待获取文件锁的时间量，等于0则无限期等待
+	Timeout time.Duration
+
+	//NoGrowSync 非增长同步模式，是否启用
+	NoGrowSync bool
+
+	//ReadOnly 只读模式，是否启用
+	ReadOnly bool
+
+	// 在内存映射文件之前设置DB.MmapFlags标志。
+	MmapFlags int
+
+	//InitialMmapSize 数据库初始mmap大小
+	InitialMmapSize int
+}
+
+//DefaultOptions db默认配置
+var DefaultOptions = &Options{
+	Timeout:    0,
+	NoGrowSync: false,
+}
+
+type Info struct {
+	Data     uintptr
+	PageSize int
+}
+
 //------------------------------------------------------ DB -----------------------------------------------------------//
 
 //DB 保存到磁盘上文件的存储桶的集合
@@ -588,12 +617,13 @@ func (db *DB) View(fn func(*Tx) error) error {
 	return nil
 }
 
-// 批处理作为批处理的一部分调用fn。它的行为类似于更新，
-// 只是：1.并发批处理调用可以组合到单个Bolt事务中。
-//      2.传递给Batch的函数可能会被多次调用，无论它是否返回错误。这意味着批处理函数的副作用必须是幂等的，
-//        并且只有在调用者中看到成功的返回后才会永久生效。最大批量大小和延迟可分别使用DB.MaxBatchSize和DB.MaxBatchDelay进行调整。批处理只有在有多个goroutine调用它时才有用。
-
+//Batch 批处理
 func (db *DB) Batch(fn func(*Tx) error) error {
+	// 批处理作为批处理的一部分调用fn。它的行为类似于更新，
+	// 只是：1.并发批处理调用可以组合到单个Bolt事务中。
+	//      2.传递给Batch的函数可能会被多次调用，无论它是否返回错误。这意味着批处理函数的副作用必须是幂等的，
+	//        并且只有在调用者中看到成功的返回后才会永久生效。最大批量大小和延迟可分别使用DB.MaxBatchSize和DB.MaxBatchDelay进行调整。批处理只有在有多个goroutine调用它时才有用。
+
 	errCh := make(chan error, 1)
 
 	// 获取 批处理锁
@@ -623,90 +653,6 @@ func (db *DB) Batch(fn func(*Tx) error) error {
 		err = db.Update(fn)
 	}
 	return err
-}
-
-//------------------------------------------------------ 批处理 -----------------------------------------------------------//
-
-//call 函数封装
-type call struct {
-	fn  func(*Tx) error
-	err chan<- error
-}
-
-//batch 批处理封装
-type batch struct {
-	db    *DB
-	timer *time.Timer // 定时器
-	start sync.Once   // 只执行一次操作的对象
-	calls []call
-}
-
-// trigger 触发批处理
-func (b *batch) trigger() {
-	b.start.Do(b.run)
-}
-
-//run 执行批处理中的事务，并将结果传回DB.batch
-func (b *batch) run() {
-	b.db.batchMu.Lock()
-	b.timer.Stop()
-	// 确保没有新工作添加到此批次，但不要中断其他批次。
-	if b.db.batch == b {
-		b.db.batch = nil
-	}
-	b.db.batchMu.Unlock()
-
-retry:
-	for len(b.calls) > 0 {
-		var failIdx = -1
-		err := b.db.Update(func(tx *Tx) error {
-			for i, c := range b.calls {
-				if err := safelyCall(c.fn, tx); err != nil {
-					failIdx = i
-					return err
-				}
-			}
-			return nil
-		})
-
-		if failIdx >= 0 {
-			// 从批处理中取出失败的事务。在这里缩短b.calls是安全的，因为db.batch不再指向我们，而且我们仍然保持互斥。
-			c := b.calls[failIdx]
-			b.calls[failIdx], b.calls = b.calls[len(b.calls)-1], b.calls[:len(b.calls)-1]
-			// 告诉提交者重新单独运行，继续批处理的其余部分
-			c.err <- trySolo
-			continue retry
-		}
-
-		// 将成功或内部错误传递给所有调用者
-		for _, c := range b.calls {
-			c.err <- err
-		}
-		break retry
-	}
-}
-
-//trySolo 是一个特殊的sentinel错误值，用于发出重新运行事务功能的信号
-var trySolo = errors.New("batch function returned an error and should be re-run solo")
-
-type panicked struct {
-	reason interface{}
-}
-
-func (p panicked) Error() string {
-	if err, ok := p.reason.(error); ok {
-		return err.Error()
-	}
-	return fmt.Sprintf("panic: %v", p.reason)
-}
-
-func safelyCall(fn func(*Tx) error, tx *Tx) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			err = panicked{p}
-		}
-	}()
-	return fn(tx)
 }
 
 //Sync 针对数据库文件句柄执行fdatasync
@@ -839,29 +785,91 @@ func (db *DB) IsReadOnly() bool {
 	return db.readOnly
 }
 
-// Options 表示打开数据库时可以设置的选项
-type Options struct {
-	//Timeout 等待获取文件锁的时间量，等于0则无限期等待
-	Timeout time.Duration
+//------------------------------------------------------ 批处理 -----------------------------------------------------------//
 
-	//NoGrowSync 非增长同步模式，是否启用
-	NoGrowSync bool
-
-	//ReadOnly 只读模式，是否启用
-	ReadOnly bool
-
-	// 在内存映射文件之前设置DB.MmapFlags标志。
-	MmapFlags int
-
-	//InitialMmapSize 数据库初始mmap大小
-	InitialMmapSize int
+//call 函数封装
+type call struct {
+	fn  func(*Tx) error
+	err chan<- error
 }
 
-//DefaultOptions db默认配置
-var DefaultOptions = &Options{
-	Timeout:    0,
-	NoGrowSync: false,
+//batch 批处理封装
+type batch struct {
+	db    *DB
+	timer *time.Timer // 定时器
+	start sync.Once   // 只执行一次操作的对象
+	calls []call
 }
+
+// trigger 触发批处理
+func (b *batch) trigger() {
+	b.start.Do(b.run)
+}
+
+//run 执行批处理中的事务，并将结果传回DB.batch
+func (b *batch) run() {
+	b.db.batchMu.Lock()
+	b.timer.Stop()
+	// 确保没有新工作添加到此批次，但不要中断其他批次。
+	if b.db.batch == b {
+		b.db.batch = nil
+	}
+	b.db.batchMu.Unlock()
+
+retry:
+	for len(b.calls) > 0 {
+		var failIdx = -1
+		err := b.db.Update(func(tx *Tx) error {
+			for i, c := range b.calls {
+				if err := safelyCall(c.fn, tx); err != nil {
+					failIdx = i
+					return err
+				}
+			}
+			return nil
+		})
+
+		if failIdx >= 0 {
+			// 从批处理中取出失败的事务。在这里缩短b.calls是安全的，因为db.batch不再指向我们，而且我们仍然保持互斥。
+			c := b.calls[failIdx]
+			b.calls[failIdx], b.calls = b.calls[len(b.calls)-1], b.calls[:len(b.calls)-1]
+			// 告诉提交者重新单独运行，继续批处理的其余部分
+			c.err <- trySolo
+			continue retry
+		}
+
+		// 将成功或内部错误传递给所有调用者
+		for _, c := range b.calls {
+			c.err <- err
+		}
+		break retry
+	}
+}
+
+//trySolo 是一个特殊的sentinel错误值，用于发出重新运行事务功能的信号
+var trySolo = errors.New("batch function returned an error and should be re-run solo")
+
+type panicked struct {
+	reason interface{}
+}
+
+func (p panicked) Error() string {
+	if err, ok := p.reason.(error); ok {
+		return err.Error()
+	}
+	return fmt.Sprintf("panic: %v", p.reason)
+}
+
+func safelyCall(fn func(*Tx) error, tx *Tx) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = panicked{p}
+		}
+	}()
+	return fn(tx)
+}
+
+//------------------------------------------------------ Stats -----------------------------------------------------------//
 
 // Stats db 统计信息
 type Stats struct {
@@ -897,21 +905,22 @@ func (s *Stats) add(other *Stats) {
 	s.TxStats.add(&other.TxStats)
 }
 
-type Info struct {
-	Data     uintptr
-	PageSize int
-}
+//------------------------------------------------------ meta -----------------------------------------------------------//
 
 // 元信息page加载到内存后的数据结构
 type meta struct {
 	magic    uint32 // 魔数
 	version  uint32 // 数据文件版本号
 	pageSize uint32 // 该db的page大小，通过syscall.Getpagesize()获取，通常是4k
-	flags    uint32
+
+	flags uint32
+
 	root     bucket // 各个bucket的根组成的树
 	freelist pgid   // 空闲列表存储的起始页ID
-	pgid     pgid   // 当前用到的最大page ID，也即用到的page数量
-	txid     txid   // 事务序列号
+
+	pgid pgid // 当前用到的最大page ID，也即用到的page数量
+	txid txid // 事务序列号
+
 	checksum uint64 // 校验和，用于校验元信息页是否完整
 }
 
@@ -969,7 +978,6 @@ func _assert(condition bool, msg string, v ...interface{}) {
 
 func warn(v ...interface{})              { fmt.Fprintln(os.Stderr, v...) }
 func warnf(msg string, v ...interface{}) { fmt.Fprintf(os.Stderr, msg+"\n", v...) }
-
 func printstack() {
 	stack := strings.Join(strings.Split(string(debug.Stack()), "\n")[2:], "\n")
 	fmt.Fprintln(os.Stderr, stack)
