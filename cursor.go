@@ -9,22 +9,18 @@ import (
 // 文件概述
 // 实现了类似迭代器的功能，可以在B+树的叶子节点上进行随意游走
 
-// 迭代器：按排序顺序遍历桶中的所有键值对
+// Cursor 迭代器：按排序顺序遍历桶中的所有键值对
 type Cursor struct {
 	bucket *Bucket   // 使用该句柄进行 node 加载
 	stack  []elemRef // 保留路径，方便回溯，因为其左右叶子节点并没有通过链表串起来
 }
 
-// Bucket returns the bucket that this cursor was created from.
-// 返回 cursor 绑定的 bucket
+//Bucket 返回 cursor 绑定的 bucket
 func (c *Cursor) Bucket() *Bucket {
 	return c.bucket
 }
 
-// First moves the cursor to the first item in the bucket and returns its key and value.
-// If the bucket is empty then a nil key and value are returned.
-// The returned key and value are only valid for the life of the transaction.
-// 定位并返回 该bucket的 第一个kv
+// First 定位并返回 该bucket的 第一个kv
 func (c *Cursor) First() (key []byte, value []byte) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 	c.stack = c.stack[:0]
@@ -46,10 +42,7 @@ func (c *Cursor) First() (key []byte, value []byte) {
 
 }
 
-// Last moves the cursor to the last item in the bucket and returns its key and value.
-// If the bucket is empty then a nil key and value are returned.
-// The returned key and value are only valid for the life of the transaction.
-// 定位并返回 该bucket的 最后一个kv
+// Last 定位并返回 该bucket的 最后一个kv
 func (c *Cursor) Last() (key []byte, value []byte) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 	c.stack = c.stack[:0]
@@ -65,10 +58,7 @@ func (c *Cursor) Last() (key []byte, value []byte) {
 	return k, v
 }
 
-// Next moves the cursor to the next item in the bucket and returns its key and value.
-// If the cursor is at the end of the bucket then a nil key and value are returned.
-// The returned key and value are only valid for the life of the transaction.
-// 定位并返回 迭代器的 下一个kv
+// Next 定位并返回 迭代器的 下一个kv
 func (c *Cursor) Next() (key []byte, value []byte) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 	k, v, flags := c.next()
@@ -78,10 +68,7 @@ func (c *Cursor) Next() (key []byte, value []byte) {
 	return k, v
 }
 
-// Prev moves the cursor to the previous item in the bucket and returns its key and value.
-// If the cursor is at the beginning of the bucket then a nil key and value are returned.
-// The returned key and value are only valid for the life of the transaction.
-// 定位并返回 迭代器的 上一个kv
+// Prev 定位并返回 迭代器的 上一个kv
 func (c *Cursor) Prev() (key []byte, value []byte) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 
@@ -110,11 +97,7 @@ func (c *Cursor) Prev() (key []byte, value []byte) {
 	return k, v
 }
 
-// Seek moves the cursor to a given key and returns it.
-// If the key does not exist then the next key is used. If no keys
-// follow, a nil key is returned.
-// The returned key and value are only valid for the life of the transaction.
-// 定位并返回 指定的kv
+// Seek 定位并返回 指定的kv
 func (c *Cursor) Seek(seek []byte) (key []byte, value []byte) {
 	k, v, flags := c.seek(seek)
 
@@ -131,9 +114,7 @@ func (c *Cursor) Seek(seek []byte) (key []byte, value []byte) {
 	return k, v
 }
 
-// Delete removes the current key/value under the cursor from the bucket.
-// Delete fails if current key/value is a bucket or if the transaction is not writable.
-// 删除 cursor 指向的 key
+// Delete 删除 cursor 指向的 key
 func (c *Cursor) Delete() error {
 	if c.bucket.tx.db == nil {
 		return ErrTxClosed
@@ -151,9 +132,7 @@ func (c *Cursor) Delete() error {
 	return nil
 }
 
-// seek moves the cursor to a given key and returns it.
-// If the key does not exist then the next key is used.
-// 查询key对应的value
+//seek 查询key对应的value
 func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 
@@ -171,7 +150,7 @@ func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 	return c.keyValue()
 }
 
-// 移动 cursor 到以栈顶元素为根顶子树中 最左边顶叶子节点
+//first 移动 cursor 到以栈顶元素为根顶子树中 最左边顶叶子节点
 func (c *Cursor) first() {
 	for {
 		// Exit when we hit a leaf page.
@@ -192,7 +171,7 @@ func (c *Cursor) first() {
 	}
 }
 
-// 移动 cursor 到以栈顶元素为根顶子树中 最右边顶叶子节点
+//last 移动 cursor 到以栈顶元素为根顶子树中 最右边顶叶子节点
 func (c *Cursor) last() {
 	for {
 		// Exit when we hit a leaf page.
@@ -216,9 +195,7 @@ func (c *Cursor) last() {
 	}
 }
 
-// next moves to the next leaf element and returns the key and value.
-// If the cursor is at the last leaf element then it stays there and returns nil.
-// 移动 cursor 到下一个叶子元素
+//next 移动 cursor 到下一个叶子元素
 func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 	for {
 		// Attempt to move over one element until we're successful.
@@ -253,7 +230,7 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 	}
 }
 
-// 查找 keu 所在node，并中cursor中记下路径
+//search 查找 keu 所在node，并中cursor中记下路径
 func (c *Cursor) search(key []byte, pgid pgid) {
 	p, n := c.bucket.pageNode(pgid)
 	if p != nil && (p.flags&(branchPageFlag|leafPageFlag)) == 0 {
@@ -318,7 +295,7 @@ func (c *Cursor) searchPage(key []byte, p *page) {
 	c.search(key, inodes[index].pgid)
 }
 
-// nsearch searches the leaf node on the top of the stack for a key.
+// nsearch 在堆栈顶部的叶节点上搜索键
 func (c *Cursor) nsearch(key []byte) {
 	e := &c.stack[len(c.stack)-1]
 	p, n := e.page, e.node
@@ -340,7 +317,7 @@ func (c *Cursor) nsearch(key []byte) {
 	e.index = index
 }
 
-// keyValue returns the key and value of the current leaf element.
+// keyValue 返回当前叶元素的键和值
 func (c *Cursor) keyValue() ([]byte, []byte, uint32) {
 	ref := &c.stack[len(c.stack)-1]
 	if ref.count() == 0 || ref.index >= ref.count() {
@@ -358,7 +335,7 @@ func (c *Cursor) keyValue() ([]byte, []byte, uint32) {
 	return elem.key(), elem.value(), elem.flags
 }
 
-// node returns the node that the cursor is currently positioned on.
+// node 返回当前node
 func (c *Cursor) node() *node {
 	_assert(len(c.stack) > 0, "accessing a node with a zero-length cursor stack")
 
@@ -387,7 +364,7 @@ type elemRef struct {
 	index int // 表示路径经过该节点时中inode中的位置
 }
 
-// isLeaf returns whether the ref is pointing at a leaf page/node.
+// isLeaf 返回ref是否指向叶pagenode。
 func (r *elemRef) isLeaf() bool {
 	if r.node != nil {
 		return r.node.isLeaf
@@ -395,7 +372,7 @@ func (r *elemRef) isLeaf() bool {
 	return (r.page.flags & leafPageFlag) != 0
 }
 
-// count returns the number of inodes or page elements.
+// count 返回索引节点或页面元素的数量。
 func (r *elemRef) count() int {
 	if r.node != nil {
 		return len(r.node.inodes)

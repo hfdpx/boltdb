@@ -213,7 +213,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 		return nil, err
 	}
 
-	// 读入 free list
+	// 读入 freeList
 	db.freelist = newFreelist()
 	db.freelist.read(db.page(db.meta().freelist))
 

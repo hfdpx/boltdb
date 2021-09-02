@@ -37,8 +37,8 @@ const (
 
 type pgid uint64
 type page struct {
-	id       pgid   // id
-	flags    uint16 // 类型
+	id       pgid   // page id
+	flags    uint16 // page 类型
 	count    uint16 // 对应节点包含的元素个数，比如说包含的KV对
 	overflow uint32 // 对应节点元素溢出到其他page的page数量，即使用 overflow+1 个page来保存对应节点的信息
 	//以上四个字段构成了 page 定长header

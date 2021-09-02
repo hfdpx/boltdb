@@ -6,6 +6,7 @@ import (
 	"unsafe"
 )
 
+//------------------------------------------------------ 常量 -----------------------------------------------------------//
 const (
 	// MaxKeySize key的最大长度，单位：字节
 	MaxKeySize = 32768
@@ -33,6 +34,8 @@ const (
 
 // DefaultFillPercent 默认的bucket中节点的填充百分比阈值，当node中key的个数或者size超过整个node容量的某个百分比阈值之后，节点必须分裂为两个节点，这是为了防止B+树中插入kv对时引发频繁的再平衡操作
 const DefaultFillPercent = 0.5
+
+//------------------------------------------------------ bucket -----------------------------------------------------------//
 
 // bucket 头部
 type bucket struct {
@@ -77,7 +80,7 @@ func (b *Bucket) Writable() bool {
 	return b.tx.writable
 }
 
-// Cursor 创建一个该bucket上的游标[此游标仅事务存活期间有效]
+// Cursor 创建一个该bucket上的游标【此游标仅事务存活期间有效】
 func (b *Bucket) Cursor() *Cursor {
 	// 事务游标计数+1
 	b.tx.stats.CursorCount++
@@ -89,7 +92,7 @@ func (b *Bucket) Cursor() *Cursor {
 	}
 }
 
-// Bucket 根据name查找bucket，bucket不存在则返回nil[该bucket也仅仅在事务生存期间有效]
+// Bucket 根据name查找bucket，bucket不存在则返回nil【该bucket也仅仅在事务生存期间有效】
 func (b *Bucket) Bucket(name []byte) *Bucket {
 	// 先看buckets缓存记录有没有，有则直接返回
 	if b.buckets != nil {
@@ -145,7 +148,7 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 	return &child
 }
 
-// CreateBucket 创建一个指定名称的bucket，同样：仅在事务生存期间有效
+// CreateBucket 创建一个指定名称的bucket【仅在事务生存期间有效】
 func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	if b.tx.db == nil { // tx 关闭
 		return nil, ErrTxClosed
@@ -155,12 +158,10 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 		return nil, ErrBucketNameRequired
 	}
 
-	// Move cursor to correct position.
 	// 通过游标寻找bucket
 	c := b.Cursor()
 	k, _, flags := c.seek(key)
 
-	// Return an error if there is an existing key.
 	// 已存在该bucket则返回error
 	if bytes.Equal(key, k) {
 		if (flags & bucketLeafFlag) != 0 {
@@ -169,7 +170,6 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 		return nil, ErrIncompatibleValue
 	}
 
-	// Create empty, inline bucket.
 	// 创建一个空的bucket
 	var bucket = Bucket{
 		bucket:      &bucket{},
@@ -178,14 +178,10 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	}
 	var value = bucket.write()
 
-	// Insert into node.
 	// 将新bucket写入node
 	key = cloneBytes(key)
 	c.node().put(key, key, value, 0, bucketLeafFlag)
 
-	// Since subbuckets are not allowed on inline buckets, we need to
-	// dereference the inline page, if it exists. This will cause the bucket
-	// to be treated as a regular, non-inline bucket for the rest of the tx.
 	// 因为当前bucket已经包含了刚创建的新bucket，所以是非内联bucket，得将内联引用b.page置为nil
 	b.page = nil
 
@@ -193,7 +189,7 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	return b.Bucket(key), nil
 }
 
-// CreateBucketIfNotExists 创建一个指定名称的bucket，如果它还不存在的话，同样：仅在事务生存期间有效
+// CreateBucketIfNotExists 创建一个指定名称的bucket，如果它还不存在的话【仅在事务生存期间有效】
 func (b *Bucket) CreateBucketIfNotExists(key []byte) (*Bucket, error) {
 	child, err := b.CreateBucket(key)
 	if err == ErrBucketExists {
@@ -217,7 +213,6 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 	c := b.Cursor()
 	k, _, flags := c.seek(key)
 
-	// Return an error if bucket doesn't exist or is not a bucket.
 	// 不存在或者不是bucket，返回错误
 	if !bytes.Equal(key, k) {
 		return ErrBucketNotFound
@@ -225,7 +220,6 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 		return ErrIncompatibleValue
 	}
 
-	// Recursively delete all child buckets.
 	// 递归删除其所有的子bucket
 	child := b.Bucket(key)
 	err := child.ForEach(func(k, v []byte) error {
@@ -240,17 +234,14 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 		return err
 	}
 
-	// Remove cached copy.
 	// 删除该bucket在缓存中的信息
 	delete(b.buckets, string(key))
 
-	// Release all bucket pages to freelist.
 	// 释放该bucket上的所有page 到 freelist
 	child.nodes = nil
 	child.rootNode = nil
 	child.free()
 
-	// Delete the node if we have a matching key.
 	// 在node中删除该key
 	c.node().del(key)
 
@@ -262,13 +253,11 @@ func (b *Bucket) Get(key []byte) []byte {
 	// 查找
 	k, v, flags := b.Cursor().seek(key)
 
-	// Return nil if this is a bucket.
 	// 找到的是bucket，返回nil
 	if (flags & bucketLeafFlag) != 0 {
 		return nil
 	}
 
-	// If our target node isn't the same key as what's passed in then return nil.
 	// 没找到，同样返回nil
 	if !bytes.Equal(key, k) {
 		return nil
@@ -290,18 +279,17 @@ func (b *Bucket) Put(key []byte, value []byte) error {
 		return ErrValueTooLarge
 	}
 
-	// Move cursor to correct position.
 	// 查找key
 	c := b.Cursor()
 	k, _, flags := c.seek(key)
 
-	// Return an error if there is an existing key with a bucket value.
-	// key已存在：即当前欲插入的key与当前bucket中已有一个子bucket的key相同时，拒绝写入，从而保护嵌套的子bucket的引用不会被擦除，防止子bucket变成孤儿
+	// 当前欲插入的key与当前bucket中已有一个子bucket的key相同时，拒绝写入，从而保护嵌套的子bucket的引用不会被擦除，防止子bucket变成孤儿
 	if bytes.Equal(key, k) && (flags&bucketLeafFlag) != 0 {
 		return ErrIncompatibleValue
 	}
 
-	// Insert into node.
+	//fmt.Printf("key %v 是否已存在: %v \n", string(key), bytes.Equal(key, k))
+
 	// key-value 插入node
 	key = cloneBytes(key) // 深度拷贝key
 	c.node().put(key, key, value, 0, 0)
@@ -317,18 +305,15 @@ func (b *Bucket) Delete(key []byte) error {
 		return ErrTxNotWritable
 	}
 
-	// Move cursor to correct position.
 	// 查找
 	c := b.Cursor()
 	_, _, flags := c.seek(key)
 
-	// Return an error if there is already existing bucket value.
 	// 已存在，但是一个bucket
 	if (flags & bucketLeafFlag) != 0 {
 		return ErrIncompatibleValue
 	}
 
-	// Delete the node if we have a matching key.
 	// 删除key
 	c.node().del(key)
 
@@ -346,14 +331,12 @@ func (b *Bucket) SetSequence(v uint64) error {
 		return ErrTxNotWritable
 	}
 
-	// Materialize the root node if it hasn't been already so that the
-	// bucket will be saved during commit.
-	// ？？？
+	// 具体化根节点（如果还没有），以便在提交期间保存该bucket。
 	if b.rootNode == nil {
 		_ = b.node(b.root, nil)
 	}
 
-	// Increment and return the sequence.
+	// 更新序列号
 	b.bucket.sequence = v
 	return nil
 }
@@ -366,13 +349,11 @@ func (b *Bucket) NextSequence() (uint64, error) {
 		return 0, ErrTxNotWritable
 	}
 
-	// Materialize the root node if it hasn't been already so that the
-	// bucket will be saved during commit.
+	// 具体化根节点（如果还没有），以便在提交期间保存该bucket。
 	if b.rootNode == nil {
 		_ = b.node(b.root, nil)
 	}
 
-	// Increment and return the sequence.
 	b.bucket.sequence++
 	return b.bucket.sequence, nil
 }
@@ -403,43 +384,29 @@ func (b *Bucket) Stats() BucketStats {
 		if (p.flags & leafPageFlag) != 0 { // 该page为 叶子节点类型的page
 			s.KeyN += int(p.count)
 
-			// used totals the used bytes for the page
 			// 此page 使用的 总字节数
 			used := pageHeaderSize
 
 			if p.count != 0 {
-				// If page has any elements, add all element headers.
 				// kv结构体头部大小 * kv数量
 				used += leafPageElementSize * int(p.count-1)
 
-				// Add all element key, value sizes.
-				// The computation takes advantage of the fact that the position
-				// of the last element's key/value equals to the total of the sizes
-				// of all previous elements' keys and values.
-				// It also includes the last element's header.
 				lastElement := p.leafPageElement(p.count - 1)                        // 最后一个kv对
 				used += int(lastElement.pos + lastElement.ksize + lastElement.vsize) // 最后一个kv对位置=之前所有kv对大小+最后一个kv对头部
 			}
 
 			if b.root == 0 { // 内联bucket
-				// For inlined bucket just update the inline stats
 				s.InlineBucketInuse += used
 			} else {
-				// For non-inlined bucket update all the leaf stats
 				// 非内联bucket 叶子节点类型page 状态 更新（因为该page是叶子节点类型的page）
 				s.LeafPageN++
 				s.LeafInuse += used
 				s.LeafOverflowN += int(p.overflow)
 
-				// Collect stats from sub-buckets.
-				// Do that by iterating over all element headers
-				// looking for the ones with the bucketLeafFlag.
 				// 从子bucket收集状态信息
 				for i := uint16(0); i < p.count; i++ {
 					e := p.leafPageElement(i)
 					if (e.flags & bucketLeafFlag) != 0 { // 该元素是子bucket
-						// For any bucket element, open the element value
-						// and recursively call Stats on the contained bucket.
 						subStats.Add(b.openBucket(e.value()).Stats()) // 递归迭代
 					}
 				}
@@ -448,32 +415,23 @@ func (b *Bucket) Stats() BucketStats {
 			s.BranchPageN++
 			lastElement := p.branchPageElement(p.count - 1)
 
-			// used totals the used bytes for the page
-			// Add header and all element headers.
 			used := pageHeaderSize + (branchPageElementSize * int(p.count-1)) // page 头部大小+ page中所有元素的头部大小
 
-			// Add size of all keys and values.
-			// Again, use the fact that last element's position equals to
-			// the total of key, value sizes of all previous elements.
 			used += int(lastElement.pos + lastElement.ksize) // 最后一个元素位置+ 最后一个元素key的大小 （分支节点类型的page 不存储value值，只提供索引功能，所以没有加上vsize）
 			s.BranchInuse += used
 			s.BranchOverflowN += int(p.overflow)
 		}
 
-		// Keep track of maximum page depth.
 		if depth+1 > s.Depth { // 记录最大深度
-			s.Depth = (depth + 1)
+			s.Depth = depth + 1
 		}
 	})
 
-	// Alloc stats can be computed from page counts and pageSize.
 	s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * pageSize // （bucket的分支节点类型page数量 + bucket的分支节点类型page溢出数量）* page 大小
 	s.LeafAlloc = (s.LeafPageN + s.LeafOverflowN) * pageSize
 
-	// Add the max depth of sub-buckets to get total nested depth.
 	// 加上子bucket的深度
 	s.Depth += subStats.Depth
-	// Add the stats for all sub-buckets
 	// 加上子bucket状态
 	s.Add(subStats)
 	return s
@@ -481,22 +439,20 @@ func (b *Bucket) Stats() BucketStats {
 
 //forEachPage 对 bucket 内的每一个page 执行fn
 func (b *Bucket) forEachPage(fn func(*page, int)) {
-	// If we have an inline page then just use that.
 	// 内联page 直接执行fn
 	if b.page != nil {
 		fn(b.page, 0)
 		return
 	}
 
-	// Otherwise traverse the page hierarchy.
 	// 对每一个page 执行fn
 	b.tx.forEachPage(b.root, 0, fn)
 }
 
 //forEachPageNode 对 bucket内的每一个page或node 执行 fn
 func (b *Bucket) forEachPageNode(fn func(*page, *node, int)) {
-	// If we have an inline page or root node then just use that.
-	if b.page != nil { // 内联page or node，直接执行fn
+	// 内联page or node，直接执行fn
+	if b.page != nil {
 		fn(b.page, nil, 0)
 		return
 	}
@@ -505,10 +461,8 @@ func (b *Bucket) forEachPageNode(fn func(*page, *node, int)) {
 func (b *Bucket) _forEachPageNode(pgid pgid, depth int, fn func(*page, *node, int)) {
 	var p, n = b.pageNode(pgid)
 
-	// Execute function.
 	fn(p, n, depth)
 
-	// Recursively loop over children.
 	// 子对象上递归执行
 	if p != nil {
 		if (p.flags & branchPageFlag) != 0 {
@@ -530,9 +484,7 @@ func (b *Bucket) _forEachPageNode(pgid pgid, depth int, fn func(*page, *node, in
 func (b *Bucket) spill() error {
 	// 遍历 子bucket
 	for name, child := range b.buckets {
-		// If the child bucket is small enough and it has no child buckets then
-		// write it inline into the parent bucket's page. Otherwise spill it
-		// like a normal bucket and make the parent value a pointer to the page.
+		//如果子bucket足够小并且没有子bucket，那么将其内联写入父bucket的页面。否则，将其像普通桶一样溢出，并使父值成为指向页面的指针。
 		var value []byte
 		if child.inlineable() { // 该子bucket是内联bucket：那么释放子bucket，将其写入到父bucket
 			child.free()
@@ -543,20 +495,18 @@ func (b *Bucket) spill() error {
 				return err
 			}
 
-			// Update the child bucket header in this bucket.
 			// 更新 子bucket的header
 			value = make([]byte, unsafe.Sizeof(bucket{}))
 			var bucket = (*bucket)(unsafe.Pointer(&value[0]))
-			*bucket = *child.bucket // todo ????????? *bucket后面没有使用了啊，为什么要这么写
+			*bucket = *child.bucket
 		}
 
-		// Skip writing the bucket if there are no materialized nodes.
 		// 没有具化成node 跳过
 		if child.rootNode == nil {
 			continue
 		}
 
-		// Update parent node.
+		//更新父节点
 		var c = b.Cursor()
 		k, _, flags := c.seek([]byte(name)) // 创建游标，寻找子bucket
 		if !bytes.Equal([]byte(name), k) {  // 没有找到该子bucket
@@ -569,7 +519,7 @@ func (b *Bucket) spill() error {
 		c.node().put([]byte(name), []byte(name), value, 0, bucketLeafFlag)
 	}
 
-	// Ignore if there's not a materialized root node.
+	//如果没有具体化的根节点，则忽略。
 	if b.rootNode == nil {
 		return nil
 	}
@@ -599,14 +549,13 @@ func (b *Bucket) inlineable() bool {
 
 	var n = b.rootNode
 
-	// Bucket must only contain a single leaf node.
+	// Bucket只能包含一个叶节点。
 	// n == nil || n是分支节点
 	if n == nil || !n.isLeaf {
 		return false
 	}
 
-	// Bucket is not inlineable if it contains subbuckets or if it goes beyond
-	// our threshold for inline bucket size.
+	//如果Bucket包含子Bucket，或者超过了内联Bucket大小的阈值，则Bucket是不可内联的。
 	var size = pageHeaderSize
 	for _, inode := range n.inodes {
 		size += leafPageElementSize + len(inode.key) + len(inode.value)
@@ -628,16 +577,13 @@ func (b *Bucket) maxInlineBucketSize() int {
 
 //write bucket 转 []byte：其实是将bucket写入page中
 func (b *Bucket) write() []byte {
-	// Allocate the appropriate size.
 	var n = b.rootNode                                  // 只要将bucket 根节点写入page中就好了，其他节点可以通过索引找到
 	var value = make([]byte, bucketHeaderSize+n.size()) // 分配适当大小(就是bucketheader+根节点大小)
 
-	// Write a bucket header.
 	// 向value中写入一个bucket header
 	var bucket = (*bucket)(unsafe.Pointer(&value[0]))
 	*bucket = *b.bucket
 
-	// Convert byte slice to a fake page and write the root node.
 	// p是page指针，指向写入n的page
 	var p = (*page)(unsafe.Pointer(&value[bucketHeaderSize]))
 	n.write(p)
@@ -662,13 +608,11 @@ func (b *Bucket) node(pgid pgid, parent *node) *node {
 	// 处理异常
 	_assert(b.nodes != nil, "nodes map expected")
 
-	// Retrieve node if it's already been created.
 	// 判断要创建的节点是否已存在
 	if n := b.nodes[pgid]; n != nil {
 		return n
 	}
 
-	// Otherwise create a node and cache it.
 	// 创建一个node
 	n := &node{bucket: b, parent: parent}
 	if parent == nil { // 如果其parent is nil，则将新建节点n置为bucket的根节点
@@ -677,14 +621,12 @@ func (b *Bucket) node(pgid pgid, parent *node) *node {
 		parent.children = append(parent.children, n)
 	}
 
-	// Use the inline page if this is an inline bucket.
 	// 定位到对应page
 	var p = b.page
 	if p == nil {
 		p = b.tx.page(pgid)
 	}
 
-	// Read the page into the node and cache it.
 	// node n 读取 page 内容，并且记录在bucket的nodes信息中
 	n.read(p)
 	b.nodes[pgid] = n
@@ -725,8 +667,6 @@ func (b *Bucket) dereference() {
 
 //pageNode 根据pageID 查找对应page和node，node存在则先返回node，不存在则返回page
 func (b *Bucket) pageNode(id pgid) (*page, *node) {
-	// Inline buckets have a fake page embedded in their value so treat them
-	// differently. We'll return the rootNode (if available) or the fake page.
 	// inline buckeet，rootNode存在则返回rootNode，不存在则返回page
 	if b.root == 0 {
 		if id != 0 {
@@ -738,7 +678,6 @@ func (b *Bucket) pageNode(id pgid) (*page, *node) {
 		return b.page, nil
 	}
 
-	// Check the node cache for non-inline buckets.
 	// 从node cache中查找node，存在则返回
 	if b.nodes != nil {
 		if n := b.nodes[id]; n != nil {
@@ -746,12 +685,13 @@ func (b *Bucket) pageNode(id pgid) (*page, *node) {
 		}
 	}
 
-	// Finally lookup the page from the transaction if no node is materialized.
 	// 没找到node，返回page
 	return b.tx.page(id), nil
 }
 
-// BucketStats bucket
+//------------------------------------------------------ BucketStats -----------------------------------------------------------//
+
+// BucketStats bucket状态统计
 type BucketStats struct {
 	// page statistics
 	BranchPageN     int // 分支节点类型的page 数
@@ -794,7 +734,7 @@ func (s *BucketStats) Add(other BucketStats) {
 	s.InlineBucketInuse += other.InlineBucketInuse
 }
 
-// 返回给定切片的副本
+//cloneBytes 返回给定切片的副本
 func cloneBytes(v []byte) []byte {
 	var clone = make([]byte, len(v))
 	copy(clone, v)

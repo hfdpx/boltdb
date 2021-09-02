@@ -145,7 +145,8 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	}
 
 	// 找到插入点下标
-	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, oldKey) != -1 })
+	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, oldKey) != -1 }) // 字典序：a >= b
+	//fmt.Printf("插入点下标：%v\n\n",index)
 
 	// 如果key是新增而非替换，则需要为待插入节点腾出空间（index后面元素整体右移，腾出一个位置）
 	exact := len(n.inodes) > 0 && index < len(n.inodes) && bytes.Equal(n.inodes[index].key, oldKey)
